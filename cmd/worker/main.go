@@ -5,15 +5,17 @@ import (
 	"log"
 	"net"
 	"strings"
+	"time"
 )
 
 type server struct {
-	recv chan []byte
-	send chan []byte
-	ln   net.Listener
+	recv       chan []byte
+	send       chan []byte
+	ln         net.Listener
+	serverAddr string
 }
 
-func NewServer(addr string) (*server, error) {
+func NewServer(addr, serverAddr string) (*server, error) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		log.Printf("listen on %s err: %v", addr, err)
@@ -21,9 +23,10 @@ func NewServer(addr string) (*server, error) {
 	}
 
 	s := &server{
-		recv: make(chan []byte),
-		send: make(chan []byte),
-		ln:   l,
+		recv:       make(chan []byte, 10),
+		send:       make(chan []byte, 10),
+		ln:         l,
+		serverAddr: serverAddr,
 	}
 
 	go s.accept()
@@ -35,7 +38,29 @@ func NewServer(addr string) (*server, error) {
 }
 
 func (s *server) dialServer() {
+	var conn net.Conn
+	var err error
+	for {
+		conn, err = net.Dial("tcp", s.serverAddr)
+		if err != nil {
+			log.Println("trying to connect to server")
+			time.Sleep(time.Second * 3)
+			continue
+		}
+		break
+	}
+	go s.sendMsg(conn)
+}
 
+func (s *server) sendMsg(conn net.Conn) {
+	log.Println("prepare for send msg to server")
+	for {
+		m := <-s.send
+		_, err := conn.Write(m)
+		if err != nil {
+			log.Printf("send msg err: %v\n", err)
+		}
+	}
 }
 
 func (s *server) accept() {
@@ -73,7 +98,7 @@ func main() {
 	flag.StringVar(&serverAddr, "server", "", "-server=:3000")
 	flag.Parse()
 
-	s, err := NewServer(port)
+	s, err := NewServer(port, serverAddr)
 	if err != nil {
 		log.Fatalf("start server err: %v\n", err)
 	}
@@ -81,7 +106,7 @@ func main() {
 	log.Printf("start worker server on %s success\n", port)
 
 	for v := range s.recv {
-		log.Println(upperString(string(v)))
+		s.send <- []byte(upperString(string(v)))
 	}
 
 }

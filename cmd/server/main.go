@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -60,18 +62,53 @@ type server struct {
 	mu      *sync.Mutex
 	workers map[string]*worker
 	msg     chan []byte
+	recv    chan []byte
+	ln      net.Listener
 }
 
-func NewServer() (*server, error) {
+func NewServer(addr string) (*server, error) {
+
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Printf("listen on %s err %v", addr, err)
+		return nil, err
+	}
+
 	s := &server{
 		mu:      new(sync.Mutex),
 		workers: make(map[string]*worker),
 		msg:     make(chan []byte),
+		recv:    make(chan []byte, 10),
+		ln:      l,
 	}
 
+	go s.accept()
 	go s.assignMsgToWorker()
 
 	return s, nil
+}
+
+func (s *server) accept() {
+	log.Println("prepare for accept msg from worker")
+	for {
+		c, err := s.ln.Accept()
+		if err != nil {
+			continue
+		}
+		go s.recvMsg(c)
+	}
+}
+
+func (s *server) recvMsg(conn net.Conn) {
+	for {
+		buf := make([]byte, 1024)
+		_, err := conn.Read(buf)
+		if err != nil {
+			continue
+		}
+
+		s.recv <- buf
+	}
 }
 
 func (s *server) addWorker(w *worker) {
@@ -92,8 +129,11 @@ func (s *server) assignMsgToWorker() {
 }
 
 func main() {
+	var port string
+	flag.StringVar(&port, "port", "", "-port=:3000")
+	flag.Parse()
 
-	s, err := NewServer()
+	s, err := NewServer(port)
 	if err != nil {
 		log.Fatalf("start server error: %v", err)
 	}
@@ -108,6 +148,13 @@ func main() {
 		log.Fatalf("worker 2 err: %v", err)
 	}
 	s.addWorker(w2)
+
+	go func() {
+		for {
+			m := <-s.recv
+			fmt.Println(string(m))
+		}
+	}()
 
 	msg := []string{"foo", "bar", "baz", "foobar", "foobaz"}
 	for {
