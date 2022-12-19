@@ -87,6 +87,7 @@ func (s *server) handleConn(conn net.Conn) {
 }
 
 func upperString(s string) string {
+	log.Println("process ", s)
 	return strings.ToUpper(s)
 }
 

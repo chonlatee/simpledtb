@@ -2,12 +2,15 @@ package main
 
 import (
 	"flag"
-	"fmt"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net"
+	"os"
 	"sync"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type worker struct {
@@ -83,7 +86,6 @@ func NewServer(addr string) (*server, error) {
 	}
 
 	go s.accept()
-	go s.assignMsgToWorker()
 
 	return s, nil
 }
@@ -118,14 +120,23 @@ func (s *server) addWorker(w *worker) {
 }
 
 func (s *server) assignMsgToWorker() {
-	ws := []string{"w1", "w2"}
+	var names []string
+	for _, v := range s.workers {
+		names = append(names, v.name)
+	}
+
 	for {
 		log.Println("assign msg to worker")
 		m := <-s.msg
-		n := ws[rand.Intn(2)]
+		n := names[rand.Intn(len(names))]
 		log.Printf("send %s to channel of worker %s \n", string(m), n)
 		s.workers[n].send <- m
 	}
+}
+
+type workerConfig struct {
+	Name string
+	Addr string
 }
 
 func main() {
@@ -138,28 +149,44 @@ func main() {
 		log.Fatalf("start server error: %v", err)
 	}
 
-	w1, err := NewWorker("w1", ":3333")
+	dir, err := os.Getwd()
 	if err != nil {
-		log.Fatalf("worker 1 err: %v", err)
+		log.Fatal("can't get current working dir: ", err.Error())
 	}
-	s.addWorker(w1)
-	w2, err := NewWorker("w2", ":3334")
+
+	f, err := ioutil.ReadFile(dir + "/config/worker.yaml")
 	if err != nil {
-		log.Fatalf("worker 2 err: %v", err)
+		log.Fatalf("can't open worker config file")
 	}
-	s.addWorker(w2)
+
+	var wkCfg []workerConfig
+	err = yaml.Unmarshal(f, &wkCfg)
+
+	if err != nil {
+		log.Fatalf("can't unmarshal worker config file: %v", err)
+	}
+
+	for _, v := range wkCfg {
+		w, err := NewWorker(v.Name, v.Addr)
+		if err != nil {
+			log.Fatalf("%s err %v", v.Name, err)
+		}
+		s.addWorker(w)
+	}
+
+	go s.assignMsgToWorker()
 
 	go func() {
 		for {
 			m := <-s.recv
-			fmt.Println(string(m))
+			log.Printf("receive msg %s from worker\n", string(m))
 		}
 	}()
 
 	msg := []string{"foo", "bar", "baz", "foobar", "foobaz"}
 	for {
 		time.Sleep(time.Second * 2)
-		m := msg[rand.Intn(4)]
+		m := msg[rand.Intn(len(msg)-1)]
 		log.Println("send msg to chan: ", m)
 		s.msg <- []byte(m)
 	}
